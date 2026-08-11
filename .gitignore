@@ -1,0 +1,9 @@
+# Standardmäßig alles im skills-Ordner ignorieren …
+/*
+# … und nur die gesicherten Skills und Agenten wieder aufnehmen.
+!.gitignore
+!/LICENSE
+!/README.md
+!/roblox-standards/
+!/roblox-projekt-aufsetzen/
+!/agents/
