@@ -940,6 +940,16 @@ Soll Gameplay-Input während eines Menüs ruhen, werden die Gameplay-Aktionen en
 Kein `if _isMenuOpen then return end` in den Handlern — sonst verteilt sich die Moduslogik
 über alle Handler und der eine vergessene wird zum Bug.
 
+Das gilt für **jedes** Wirkungsfenster, nicht nur Menüs. Der Grund ist schärfer als sauberes
+Aufräumen: Eine Aktion, die `Sink` zurückgibt (R53), verschluckt ihre Eingabe **bildschirmweit**
+— auch die jeder anderen UI. Bleibt ein Gameplay-`Sink` gebunden, während er nichts bewirkt,
+frisst er lautlos die Klicks von world-space-`SurfaceGui`s und fremden Menüs; die reagieren dann
+auf Hover, aber nicht auf den Klick, und der Fehler sieht nach einem GUI-Bug aus statt nach einer
+Bindung. Binde eine Gameplay-Aktion an denselben Zustand, unter dem der Server sie überhaupt
+annimmt (Teilnehmer, laufende Runde), über das Präsenz-/Zustandssignal — nicht bedingungslos beim
+Start. *(Real getroffen: eine bedingungslos gebundene `Reveal`-Aktion sank in der Lobby jeden
+Linksklick und machte eine Kauf-Tafel unklickbar — Hover ja, Klick nein.)*
+
 **R55 — Was gebunden wird, wird wieder entbunden.**
 Gebundene Aktionen überleben den Kontext, in dem sie gebunden wurden. Zu jeder Bindung
 gehört eine Entbindung an der Stelle, an der der Kontext endet.
@@ -2063,7 +2073,7 @@ statt gegen eine Codezeile.
 | R51 | Aktionsnamen sind Konstanten, keine Stringliterale | mechanisch |
 | R52 | Jede Aktion deckt Tastatur/Maus, Gamepad und Touch ab | mechanisch |
 | R53 | Handler geben `Sink` oder `Pass` explizit zurück | mechanisch |
-| R54 | Moduswechsel über Binden/Entbinden, nicht über Flags | mechanisch |
+| R54 | Moduswechsel über Binden/Entbinden, nicht über Flags; ein Gameplay-`Sink` nur in seinem Wirkungsfenster gebunden | mechanisch |
 | R55 | Zu jeder Bindung gehört eine Entbindung | mechanisch |
 | R56 | Signale als zur Laufzeit erzeugtes `BindableEvent`, nur `.Event` öffentlich | mechanisch |
 | R57 | Keine Tabellen über Signale schicken | mechanisch |
