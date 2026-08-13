@@ -1187,6 +1187,86 @@ gegen die in `PROJEKT-AUFSETZEN.md` notierte geprüft. *(Ergänzt am 9. August 2
 > Server (Lesen und Schreiben je `60 + Spieler × 40`). Überschrittene Anfragen landen in
 > einer Warteschlange mit 30 Plätzen — darüber werden sie **verworfen**.
 
+### Teil 3b — Monetarisierung
+
+**Grundsatz — Käufe sind server-autoritativ.** Der Client stößt höchstens einen Prompt an
+(Remote → Server ruft `Prompt…`). Über die Gutschrift entscheidet nur der Server. Kein
+`…Finished`-Event und kein Client-Signal schreibt je etwas gut.
+
+**Idempotenz ist Korrektheitsbedingung, keine Best Practice** — die offizielle Doku
+garantiert ausdrücklich NICHT „genau einmal".
+
+**R123 — Genau ein Receipt-Handler, sonst gehen Käufe verloren.**
+`ProcessReceipt` (oder das neuere `BindReceiptHandler`) wird an einer server-seitigen
+Stelle gesetzt und behandelt alle Developer Products. Fehlt der Handler, werden Quittungen
+auto-bestätigt und sind unwiederbringlich weg; ein zweiter Callback überschreibt den ersten
+still.
+
+**R124 — Jede Gutschrift ist idempotent über `receiptInfo.PurchaseId`.**
+Der Callback ist nicht „genau einmal": gleichzeitiger Lauf auf zwei Servern (Spieler joint
+Server 2, bevor Server 1 zurückkehrt) und erneute Zustellung beim nächsten Join sind
+offiziell dokumentiert — sogar nach einem `PurchaseGranted`, das das Backend nicht
+aufzeichnete. Vor jeder Gutschrift die `PurchaseId` gegen die persistierte Historie prüfen.
+
+**R125 — Grant und Vermerk atomar, `PurchaseGranted` erst nach bestätigtem Save.**
+Ablauf strikt: PurchaseId gegen Historie prüfen → in-memory gutschreiben → Vermerk → in
+EINEM `UpdateAsync` (atomar) persistieren → nur bei Save-Erfolg `PurchaseGranted`, sonst
+`NotProcessedYet`. Falsches Grant bei fehlgeschlagenem Save = der Kauf ist nur für die
+laufende Session da und danach weg.
+
+**R126 — `NotProcessedYet` ist die sichere Voreinstellung; nie endlos yielden.**
+Ganzer Callback in `pcall`; jeder unsichere Pfad (DataStore-Fehler, Spieler weg, unklare
+Gutschrift) → `Enum.ProductPurchaseDecision.NotProcessedYet` (Roblox liefert beim nächsten
+Join erneut; kein zeitbasierter Retry, kein Timeout). Der Handler darf nicht unbegrenzt
+yielden (blockiert den Receipt) — bei Spieler-Leave abbrechen.
+
+**R127 — Kein Kauf auf ungeladenen Daten.**
+Solange die Spielerdaten nicht fehlerfrei geladen sind, sind Kauf-Prompts server- UND
+clientseitig gesperrt — sonst kann die Gutschrift nie gespeichert werden.
+
+**R128 — GamePasses/Abos: der Server entscheidet Besitz, zweigleisig.**
+GamePass-Besitz beim Join per `UserOwnsGamePassAsync` (`pcall`, yieldet); der Cache liefert
+direkt nach Kauf evtl. noch `false` (bei Kauf außerhalb der Experience bis mehrere Minuten)
+→ frische Käufe über `PromptGamePassPurchaseFinished` (`wasPurchased == true`, server-seitig
+gehört), nie den Cache pollen. Abo-Vorteile sind Zustand, kein Besitz: an
+`GetUserSubscriptionStatusAsync` + `UserSubscriptionStatusChanged` koppeln, dauerhafte/
+verbrauchbare Boni erst nach bestätigter Zahlung des aktuellen Zyklus (Grace Period:
+`IsSubscribed` kann true sein, während die Zahlung noch aussteht).
+
+**R129 — Kein Client-Vertrauen bei Preisen/IDs; Preise nie hartkodieren.**
+Preise und Produkt-IDs kommen server-seitig aus `GetProductInfoAsync` (`pcall`, yieldet),
+nie aus Client-Angaben. Preise nicht in Code/UI festschreiben — regionale/dynamische Preise
+weichen pro Nutzer ab; die Anzeige holt `PriceInRobux` zur Laufzeit, für Buchhaltung zählt
+`receiptInfo.CurrencySpent`.
+
+**R130 — Refunds werden nicht automatisch zurückgerollt; Policy vor Prompt.**
+Roblox entzieht gewährte Developer-Product-Vorteile nach einem Refund nicht automatisch und
+führt keine Kaufhistorie — wer Entzug will, führt sie selbst. Kauf-Features unter
+Policy-Flags (v. a. `ArePaidRandomItemsRestricted` für bezahlte Zufallsitems/Lootboxen) über
+`GetPolicyInfoForPlayerAsync` (`pcall`) gaten und für betroffene Spieler gar nicht erst
+anbieten.
+
+**R131 — Kauf-IDs leben in `Data`-Modulen, nie im Code.**
+Im `Data`-Ordner existiert je ein Modul für die IDs der Developer Products und eines für
+die GamePasses (z. B. `Data.DeveloperProductIds` und `Data.GamepassIds`, im Stil der
+bestehenden `Data.SoundIds`/`Data.ImageIds`). Jede Stelle im Code, die eine Produkt- oder
+Pass-ID referenziert, bezieht sie ausschließlich aus diesen Modulen — keine ID-Literale im
+Logik-Code.
+
+> **Vorsicht/unbelegt:** Studio-Playtest-Kaufverhalten ist offiziell nicht dokumentiert (im
+> Live mit Billig-Produkt verifizieren; der External-Testmode kostet echte Robux); konkrete
+> Rate-Limits für `UserOwnsGamePassAsync`/`GetProductInfoAsync` nicht dokumentiert (nur
+> Transparent Batching); GamePass-Refund-Wirkung auf den Besitzstatus unbelegt; DataStore im
+> Studio braucht „Enable Studio Access to API Services"; Cross-Game-Developer-Product-
+> Verkäufe ab 30.05.2026 deaktiviert.
+
+*Quellen:* https://create.roblox.com/docs/cloud-services/data-stores/player-data-purchasing
+· https://create.roblox.com/docs/reference/engine/classes/MarketplaceService ·
+https://create.roblox.com/docs/production/monetization/developer-products ·
+https://create.roblox.com/docs/production/monetization/passes ·
+https://create.roblox.com/docs/production/monetization/subscriptions ·
+https://create.roblox.com/docs/production/monetization/regional-pricing
+
 ### Teil 4 — Instanzen und Aufräumen
 
 Zwei Tatsachen aus den offiziellen Docs, aus denen sich der Rest ergibt:
@@ -2052,6 +2132,15 @@ statt gegen eine Codezeile.
 | R120 | Neue Aktion, die einen Klang tragen könnte, bekommt sofort den Play-Aufruf auf einen leeren (`Id = 0`) Eintrag | Ermessen |
 | R121 | Bild-Ids zentral in `Data.ImageIds`; `Id = 0` heißt kein Bild; Platzhalter-Icon = `Id = 0`-Eintrag | mechanisch |
 | R122 | Toggle-Button mit Icon trägt zwei Icons (an/aus), beide in `Data.ImageIds`; Aktions-Knopf nur eins | mechanisch |
+| R123 | Genau ein Receipt-Handler (`ProcessReceipt`/`BindReceiptHandler`), sonst gehen Käufe verloren | mechanisch |
+| R124 | Jede Gutschrift idempotent über `receiptInfo.PurchaseId` gegen die persistierte Historie | mechanisch |
+| R125 | Grant und Vermerk atomar in einem `UpdateAsync`; `PurchaseGranted` erst nach bestätigtem Save | mechanisch |
+| R126 | `NotProcessedYet` als sichere Voreinstellung bei jedem unsicheren Pfad; Callback in `pcall`, nie endlos yielden | mechanisch |
+| R127 | Kauf-Prompts server- und clientseitig gesperrt, solange Spielerdaten nicht geladen sind | mechanisch |
+| R128 | GamePass-Besitz beim Join per `UserOwnsGamePassAsync`, frische Käufe über `PromptGamePassPurchaseFinished`; Abo-Vorteile an Subscription-Status/Grace-Period gekoppelt | Ermessen |
+| R129 | Preise/Produkt-IDs server-seitig aus `GetProductInfoAsync`, nie aus Client-Angaben oder hartkodiert | mechanisch |
+| R130 | Refunds werden nicht automatisch zurückgerollt; Kauf-Features unter Policy-Flags (`GetPolicyInfoForPlayerAsync`) gaten | Ermessen |
+| R131 | Kauf-IDs (Developer Products, GamePasses) leben in `Data`-Modulen, keine ID-Literale im Logik-Code | mechanisch |
 
 ---
 
